@@ -8,46 +8,51 @@ use App\Models\User;
 use App\Models\Member;
 use App\Models\Membership;
 use App\Models\UserStatus;
-use Carbon\Carbon; 
+use Carbon\Carbon;
 
 class TransactionController extends Controller
 {
-   public function getTransactions()
-{
-    $transactions = Transaction::with([
-        'user:id,role_id,first_name,last_name,username',
-        'member:id,first_name,last_name,account_balance',
-        'membershipType:id,name',
-        'membership:id,description'
-    ])->get();
+    public function getTransactions()
+    {
+        $transactions = Transaction::with([
+            'user:id,role_id,first_name,last_name,username',
+            'member:id,first_name,last_name,account_balance',
+            'membershipType:id,name',
+            'membership:id,description'
+        ])->get();
 
-    $transactions->transform(function ($transaction) {
-        $startTime = Carbon::parse($transaction->created_at);
-        $endTime = $startTime->copy()->addHours($transaction->hours);
-        $now = Carbon::now();
+        $transactions->transform(function ($transaction) {
+            $startTime = Carbon::parse($transaction->created_at);
+            $endTime = $startTime->copy()->addHours($transaction->hours);
+            $now = Carbon::now();
 
-        $remaining = $now->diffAsCarbonInterval($endTime, false);
+            if (cache()->has("transaction_pause_{$transaction->id}")) {
+                $pauseStart = Carbon::parse(cache("transaction_pause_{$transaction->id}"));
+                $pausedDuration = $now->diffInSeconds($pauseStart);
+                $startTime->addSeconds($pausedDuration);
+                $endTime = $startTime->copy()->addHours($transaction->hours);
+            }
 
-        
-        $transaction->time_left = $remaining->invert == 1 
-            ? '00:00:00'  
-            : $remaining->cascade()->format('%H:%I:%S'); 
+            $remaining = $now->diffAsCarbonInterval($endTime, false);
 
-        if ($transaction->status === 'Active' && $remaining->invert == 1) {
-            $transaction->status = 'Expired';
-            $transaction->save();
-        }
+            $transaction->time_left = $remaining->invert == 1
+                ? '00:00:00'
+                : $remaining->cascade()->format('%H:%I:%S');
 
-        return $transaction->only([
-            'id', 'user_id', 'member_id', 'hours', 'total_price', 'status',
-            'created_at', 'updated_at', 'time_left',
-            'user', 'member', 'membershipType', 'membership'
-        ]);
-    });
+            if ($transaction->status === 'Running' && $remaining->invert == 1) {
+                $transaction->status = 'Expired';
+                $transaction->save();
+            }
 
-    return response()->json(['transactions' => $transactions]);
-}
+            return $transaction->only([
+                'id', 'user_id', 'member_id', 'hours', 'total_price', 'status',
+                'created_at', 'updated_at', 'time_left',
+                'user', 'member', 'membershipType', 'membership'
+            ]);
+        });
 
+        return response()->json(['transactions' => $transactions]);
+    }
 
     public function addTransaction(Request $request)
     {
@@ -57,33 +62,51 @@ class TransactionController extends Controller
             'membership_type_id' => ['required', 'exists:membership_types,id'],
             'membership_id' => ['required', 'exists:memberships,id'],
             'hours' => ['required', 'integer', 'min:1'],
-            'status' => ['required', 'string'],
         ]);
 
-     
         $existingTransaction = Transaction::where('user_id', $request->user_id)
-            ->where('status', 'Active')
+            ->where('member_id', $request->member_id)
+            ->whereIn('status', ['Running', 'Pause'])
             ->latest()
             ->first();
 
         if ($existingTransaction) {
-            $startTime = Carbon::parse($existingTransaction->created_at);
-            $endTime = $startTime->copy()->addHours($existingTransaction->hours);
-            $now = Carbon::now();
+    $startTime = Carbon::parse($existingTransaction->created_at);
+    $endTime = $startTime->copy()->addHours($existingTransaction->hours);
+    $now = Carbon::now();
 
-            if ($now->lessThan($endTime)) {
-                $timeLeft = $now->diffAsCarbonInterval($endTime)->cascade()->format('%H:%I:%S');
+    if (
+        $existingTransaction->status === 'Pause' &&
+        cache()->has("transaction_pause_{$existingTransaction->id}")
+    ) {
+        $pauseStart = Carbon::parse(cache("transaction_pause_{$existingTransaction->id}"));
+        $pausedDuration = $now->diffInSeconds($pauseStart);
+        $startTime->addSeconds($pausedDuration);
+        $endTime = $startTime->copy()->addHours($existingTransaction->hours);
+    }
 
-                return response()->json([
-                    'error' => 'Cannot buy yet. Wait until your time is finished.',
-                    'time_left' => $timeLeft
-                ], 400);
-            }
+    $remaining = $now->diffAsCarbonInterval($endTime, false);
 
-           
-            $existingTransaction->status = 'Expired';
-            $existingTransaction->save();
-        }
+    if ($remaining->invert == 1) {
+        
+        $existingTransaction->status = 'Expired';
+        $existingTransaction->save();
+
+       
+    } else {
+        $timeLeft = $remaining->cascade()->format('%H:%I:%S');
+
+        return response()->json([
+            'error' => 'Cannot create new transaction.',
+            'active_transaction' => [
+                'id' => $existingTransaction->id,
+                'status' => $existingTransaction->status,
+                'time_left' => $timeLeft
+            ]
+        ], 400);
+    }
+}
+
 
         $membership = Membership::findOrFail($request->membership_id);
         $member = Member::findOrFail($request->member_id);
@@ -105,12 +128,103 @@ class TransactionController extends Controller
             'membership_id' => $request->membership_id,
             'hours' => $request->hours,
             'total_price' => $totalPrice,
-            'status' => $request->status,
+            'status' => 'Running',
         ]);
+
+        $startTime = Carbon::parse($transaction->created_at);
+        $endTime = $startTime->copy()->addHours($transaction->hours);
+        $now = Carbon::now();
+        $remaining = $now->diffAsCarbonInterval($endTime, false);
+
+        $transaction->time_left = $remaining->invert == 1
+            ? '00:00:00'
+            : $remaining->cascade()->format('%H:%I:%S');
 
         return response()->json([
             'message' => 'Transaction created successfully',
             'transaction' => $transaction
         ]);
     }
+
+    public function editTransactions(Request $request, $id)
+    {
+        $request->validate([
+            'status' => 'required|string|in:Running,Pause,Expired,Resume',
+        ]);
+
+        $transaction = Transaction::find($id);
+
+        if (!$transaction) {
+            return response()->json(['message' => 'Transaction not found.'], 404);
+        }
+
+        if ($transaction->status === 'Expired') {
+            return response()->json(['message' => 'Transaction is already expired.'], 400);
+        }
+
+        if ($request->status === 'Pause') {
+            if ($transaction->status !== 'Running') {
+                return response()->json(['message' => 'Only running transactions can be paused.'], 400);
+            }
+
+            cache(["transaction_pause_{$id}" => Carbon::now()], now()->addMinutes(30));
+
+            $transaction->status = 'Pause';
+            $transaction->save();
+
+            return response()->json(['message' => 'Transaction paused successfully.', 'transaction' => $transaction]);
+        }
+
+        if ($request->status === 'Resume') {
+            if ($transaction->status !== 'Pause') {
+                return response()->json(['message' => 'Only paused transactions can be resumed.'], 400);
+            }
+
+            if (!cache()->has("transaction_pause_{$id}")) {
+                return response()->json(['message' => 'No pause time recorded.'], 400);
+            }
+
+            $pauseStart = Carbon::parse(cache("transaction_pause_{$id}"));
+            $pausedDuration = Carbon::now()->diffInSeconds($pauseStart);
+
+            $transaction->created_at = $transaction->created_at->addSeconds($pausedDuration);
+            $transaction->status = 'Running';
+            $transaction->save();
+
+            cache()->forget("transaction_pause_{$id}");
+
+            return response()->json(['message' => 'Transaction resumed successfully.', 'transaction' => $transaction]);
+        }
+
+        $transaction->status = $request->status;
+        $transaction->save();
+
+        return response()->json(['message' => 'Transaction status updated.', 'transaction' => $transaction]);
+    }
+
+
+public function deleteTransaction($id)
+{
+    // Find the transaction by ID
+    $transaction = Transaction::find($id);
+
+    // Check if the transaction exists
+    if (!$transaction) {
+        return response()->json(['message' => 'Transaction not found'], 404);
+    }
+
+    // Delete the transaction
+    $transaction->delete();
+
+    // Return a response confirming the deletion
+    return response()->json(['message' => 'Transaction deleted successfully']);
+}
+
+
+
+
+
+
+
+
 }

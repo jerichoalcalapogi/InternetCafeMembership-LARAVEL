@@ -9,7 +9,7 @@ class MemberController extends Controller
 {
     public function getMembers()
     {
-        $members = Member::with('user')->get();
+        $members = Member::with('user', 'status')->get(); // Added 'status' to fetch the status relationship
         return response()->json(['members' => $members]);
     }
 
@@ -21,6 +21,7 @@ class MemberController extends Controller
             'middle_name' => ['nullable', 'string', 'max:255'],
             'last_name' => ['required', 'string', 'max:255'],
             'pc_number' => ['nullable', 'string', 'max:255', 'unique:members'],
+            'status_id' => ['required', 'exists:user_statuses,id'], // Validation for status_id
             'account_balance' => ['nullable', 'numeric'],
         ]);
 
@@ -30,6 +31,7 @@ class MemberController extends Controller
             'middle_name' => $request->middle_name,
             'last_name' => $request->last_name,
             'pc_number' => $request->pc_number,
+            'status_id' => $request->status_id, // Added status_id here
             'account_balance' => $request->account_balance,
         ]);
 
@@ -44,6 +46,7 @@ class MemberController extends Controller
             'middle_name' => ['nullable', 'string', 'max:255'],
             'last_name' => ['required', 'string', 'max:255'],
             'pc_number' => ['nullable', 'string', 'max:255', 'unique:members,pc_number,' . $id],
+            'status_id' => ['required', 'exists:user_statuses,id'], // Validation for status_id
             'account_balance' => ['nullable', 'numeric'],
         ]);
 
@@ -59,6 +62,7 @@ class MemberController extends Controller
             'middle_name' => $request->middle_name,
             'last_name' => $request->last_name,
             'pc_number' => $request->pc_number,
+            'status_id' => $request->status_id, // Added status_id here
             'account_balance' => $request->account_balance,
         ]);
 

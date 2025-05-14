@@ -16,7 +16,7 @@ return new class extends Migration
             $table->foreignId('membership_id')->constrained('memberships')->onDelete('cascade');
             $table->integer('hours');
             $table->decimal('total_price', 10, 2);
-            $table->string('status'); // e.g., Active, Expired
+            $table->string('status')->default('Running'); // e.g., Running, Expired
             $table->timestamps();
         });
     }
