@@ -5,7 +5,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthenticationController;
 use App\Http\Controllers\MemberController;
 use App\Http\Controllers\TransactionController;
-
+use App\Http\Controllers\UserController;
 
 
 Route::post('/register', [AuthenticationController::class, 'register']);
@@ -22,5 +22,17 @@ Route::middleware('auth:sanctum')->group( function () {
     Route::put('/edit-transaction/{id}', [TransactionController::class, 'editTransactions']);
     Route::delete('/delete-transaction/{id}', [TransactionController::class, 'deleteTransaction']);
     Route::post('/logout', [AuthenticationController::class, 'logout']);
+
+
+
+
+Route::get('/get-user', [UserController::class, 'getUsers']);
+Route::post('/add-user', [UserController::class, 'addUser']);
+Route::put('/edit-user/{id}', [UserController::class, 'editUser']);
+Route::delete('/delete-user/{id}', [UserController::class, 'deleteUser']);
+
+
+
+
 
 });

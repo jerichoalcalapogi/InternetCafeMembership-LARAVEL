@@ -2,17 +2,17 @@
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
+use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class User extends Authenticatable
 {
     use HasApiTokens, HasFactory, Notifiable;
 
-    
     protected $fillable = [
         'first_name',
         'middle_name',
@@ -24,7 +24,6 @@ class User extends Authenticatable
         'role_id',
         'status_id',
     ];
-
 
     /**
      * The attributes that should be hidden for serialization.
@@ -44,12 +43,14 @@ class User extends Authenticatable
     protected $casts = [
         'email_verified_at' => 'datetime',
     ];
-    public function role(): BelongsTo {
+
+    public function role(): BelongsTo
+    {
         return $this->belongsTo(Role::class);
     }
-    
-    public function userStatus(): BelongsTo {
-        return $this->belongsTo(UserStatus::class);
+
+    public function userStatus(): BelongsTo
+    {
+        return $this->belongsTo(UserStatus::class, 'status_id');
     }
-    
 }

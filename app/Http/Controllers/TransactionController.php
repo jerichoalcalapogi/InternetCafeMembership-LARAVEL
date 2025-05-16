@@ -7,13 +7,14 @@ use App\Models\Transaction;
 use App\Models\User;
 use App\Models\Member;
 use App\Models\Membership;
-use App\Models\UserStatus;
 use Carbon\Carbon;
 
 class TransactionController extends Controller
 {
-    public function getTransactions()
+    public function getTransactions(Request $request)
     {
+       
+
         $transactions = Transaction::with([
             'user:id,role_id,first_name,last_name,username',
             'member:id,first_name,last_name,account_balance',
@@ -54,97 +55,102 @@ class TransactionController extends Controller
         return response()->json(['transactions' => $transactions]);
     }
 
-    public function addTransaction(Request $request)
-    {
-        $request->validate([
-            'user_id' => ['required', 'exists:users,id'],
-            'member_id' => ['required', 'exists:members,id'],
-            'membership_type_id' => ['required', 'exists:membership_types,id'],
-            'membership_id' => ['required', 'exists:memberships,id'],
-            'hours' => ['required', 'integer', 'min:1'],
-        ]);
+   public function addTransaction(Request $request)
+{
+    $request->validate([
+        'user_id' => ['required', 'exists:users,id'],
+        'member_id' => ['required', 'exists:members,id'],
+        'membership_type_id' => ['required', 'exists:membership_types,id'],
+        'membership_id' => ['required', 'exists:memberships,id'],
+        'hours' => ['required', 'integer', 'min:1'],
+    ]);
 
-        $existingTransaction = Transaction::where('user_id', $request->user_id)
-            ->where('member_id', $request->member_id)
-            ->whereIn('status', ['Running', 'Pause'])
-            ->latest()
-            ->first();
+    $user = User::find($request->user_id);
+    if (!$user) {
+        return response()->json(['error' => 'User not found.'], 404);
+    }
+    if ($user->role_id == 2) {
+        return response()->json(['error' => 'Only Admin can access!'], 403);
+    }
 
-        if ($existingTransaction) {
-    $startTime = Carbon::parse($existingTransaction->created_at);
-    $endTime = $startTime->copy()->addHours($existingTransaction->hours);
-    $now = Carbon::now();
+    $existingTransaction = Transaction::where('user_id', $request->user_id)
+        ->where('member_id', $request->member_id)
+        ->whereIn('status', ['Running', 'Pause'])
+        ->latest()
+        ->first();
 
-    if (
-        $existingTransaction->status === 'Pause' &&
-        cache()->has("transaction_pause_{$existingTransaction->id}")
-    ) {
-        $pauseStart = Carbon::parse(cache("transaction_pause_{$existingTransaction->id}"));
-        $pausedDuration = $now->diffInSeconds($pauseStart);
-        $startTime->addSeconds($pausedDuration);
+    if ($existingTransaction) {
+        $startTime = Carbon::parse($existingTransaction->created_at);
         $endTime = $startTime->copy()->addHours($existingTransaction->hours);
-    }
+        $now = Carbon::now();
 
-    $remaining = $now->diffAsCarbonInterval($endTime, false);
-
-    if ($remaining->invert == 1) {
-        
-        $existingTransaction->status = 'Expired';
-        $existingTransaction->save();
-
-       
-    } else {
-        $timeLeft = $remaining->cascade()->format('%H:%I:%S');
-
-        return response()->json([
-            'error' => 'Cannot create new transaction.',
-            'active_transaction' => [
-                'id' => $existingTransaction->id,
-                'status' => $existingTransaction->status,
-                'time_left' => $timeLeft
-            ]
-        ], 400);
-    }
-}
-
-
-        $membership = Membership::findOrFail($request->membership_id);
-        $member = Member::findOrFail($request->member_id);
-
-        $pricePerHour = $membership->price_per_hour;
-        $totalPrice = $pricePerHour * $request->hours;
-
-        if ($member->account_balance < $totalPrice) {
-            return response()->json(['error' => 'Insufficient balance.'], 400);
+        if (
+            $existingTransaction->status === 'Pause' &&
+            cache()->has("transaction_pause_{$existingTransaction->id}")
+        ) {
+            $pauseStart = Carbon::parse(cache("transaction_pause_{$existingTransaction->id}"));
+            $pausedDuration = $now->diffInSeconds($pauseStart);
+            $startTime->addSeconds($pausedDuration);
+            $endTime = $startTime->copy()->addHours($existingTransaction->hours);
         }
 
-        $member->account_balance -= $totalPrice;
-        $member->save();
-
-        $transaction = Transaction::create([
-            'user_id' => $request->user_id,
-            'member_id' => $request->member_id,
-            'membership_type_id' => $request->membership_type_id,
-            'membership_id' => $request->membership_id,
-            'hours' => $request->hours,
-            'total_price' => $totalPrice,
-            'status' => 'Running',
-        ]);
-
-        $startTime = Carbon::parse($transaction->created_at);
-        $endTime = $startTime->copy()->addHours($transaction->hours);
-        $now = Carbon::now();
         $remaining = $now->diffAsCarbonInterval($endTime, false);
 
-        $transaction->time_left = $remaining->invert == 1
-            ? '00:00:00'
-            : $remaining->cascade()->format('%H:%I:%S');
+        if ($remaining->invert == 1) {
+            $existingTransaction->status = 'Expired';
+            $existingTransaction->save();
+        } else {
+            $timeLeft = $remaining->cascade()->format('%H:%I:%S');
 
-        return response()->json([
-            'message' => 'Transaction created successfully',
-            'transaction' => $transaction
-        ]);
+            return response()->json([
+                'error' => 'Cannot create new transaction.',
+                'active_transaction' => [
+                    'id' => $existingTransaction->id,
+                    'status' => $existingTransaction->status === 'Pause' ? 'Paused' : $existingTransaction->status,
+                    'time_left' => $timeLeft
+                ]
+            ], 400);
+        }
     }
+
+    $membership = Membership::findOrFail($request->membership_id);
+    $member = Member::findOrFail($request->member_id);
+
+    $pricePerHour = $membership->price_per_hour;
+    $totalPrice = $pricePerHour * $request->hours;
+
+    if ($member->account_balance < $totalPrice) {
+        return response()->json(['error' => 'Insufficient balance.'], 400);
+    }
+
+    $member->account_balance -= $totalPrice;
+    $member->save();
+
+    $transaction = Transaction::create([
+        'user_id' => $request->user_id,
+        'member_id' => $request->member_id,
+        'membership_type_id' => $request->membership_type_id,
+        'membership_id' => $request->membership_id,
+        'hours' => $request->hours,
+        'total_price' => $totalPrice,
+        'status' => 'Running',
+    ]);
+
+    $startTime = Carbon::parse($transaction->created_at);
+    $endTime = $startTime->copy()->addHours($transaction->hours);
+    $now = Carbon::now();
+    $remaining = $now->diffAsCarbonInterval($endTime, false);
+
+    $transaction->time_left = $remaining->invert == 1
+        ? '00:00:00'
+        : $remaining->cascade()->format('%H:%I:%S');
+
+    return response()->json([
+        'message' => 'Transaction created successfully',
+        'transaction' => $transaction
+    ]);
+}
+
 
     public function editTransactions(Request $request, $id)
     {
@@ -202,29 +208,16 @@ class TransactionController extends Controller
         return response()->json(['message' => 'Transaction status updated.', 'transaction' => $transaction]);
     }
 
+    public function deleteTransaction($id)
+    {
+        $transaction = Transaction::find($id);
 
-public function deleteTransaction($id)
-{
-    // Find the transaction by ID
-    $transaction = Transaction::find($id);
+        if (!$transaction) {
+            return response()->json(['message' => 'Transaction not found'], 404);
+        }
 
-    // Check if the transaction exists
-    if (!$transaction) {
-        return response()->json(['message' => 'Transaction not found'], 404);
+        $transaction->delete();
+
+        return response()->json(['message' => 'Transaction deleted successfully']);
     }
-
-    // Delete the transaction
-    $transaction->delete();
-
-    // Return a response confirming the deletion
-    return response()->json(['message' => 'Transaction deleted successfully']);
-}
-
-
-
-
-
-
-
-
 }
