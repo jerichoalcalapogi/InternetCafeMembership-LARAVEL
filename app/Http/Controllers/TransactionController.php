@@ -70,7 +70,7 @@ class TransactionController extends Controller
         return response()->json(['error' => 'User not found.'], 404);
     }
     if ($user->role_id == 2) {
-        return response()->json(['error' => 'Only Admin can access!'], 403);
+        return response()->json(['error' => 'Access denied. Only Admins can create transactions. Cashiers are limited to handling payments and monitoring activities '], 403);
     }
 
     $existingTransaction = Transaction::where('user_id', $request->user_id)
